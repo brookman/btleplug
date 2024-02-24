@@ -12,13 +12,13 @@
 // Copyright (c) 2014 The Rust Project Developers
 
 use super::{
-    advertisement_data_type, ble::characteristic::BLECharacteristic, ble::device::BLEDevice,
-    ble::service::BLEService, utils,
+    advertisement_data_type, ble::characteristic::BLECharacteristic,
+    ble::descriptor::BLEDescriptor, ble::device::BLEDevice, ble::service::BLEService, utils,
 };
 use crate::{
     api::{
         bleuuid::{uuid_from_u16, uuid_from_u32},
-        AddressType, BDAddr, CentralEvent, Characteristic, Peripheral as ApiPeripheral,
+        AddressType, BDAddr, CentralEvent, Characteristic, Descriptor, Peripheral as ApiPeripheral,
         PeripheralProperties, Service, ValueNotification, WriteType,
     },
     common::{adapter_manager::AdapterManager, util::notifications_stream_from_broadcast_receiver},
@@ -27,7 +27,7 @@ use crate::{
 use async_trait::async_trait;
 use dashmap::DashMap;
 use futures::stream::Stream;
-use log::{error, trace};
+use log::{trace, warn};
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "serde")]
@@ -82,6 +82,7 @@ struct Shared {
     latest_manufacturer_data: RwLock<HashMap<u16, Vec<u8>>>,
     latest_service_data: RwLock<HashMap<Uuid, Vec<u8>>>,
     services: RwLock<HashSet<Uuid>>,
+    class: RwLock<Option<u32>>,
 }
 
 impl Peripheral {
@@ -89,9 +90,9 @@ impl Peripheral {
         let (broadcast_sender, _) = broadcast::channel(16);
         Peripheral {
             shared: Arc::new(Shared {
-                adapter: adapter,
+                adapter,
                 device: tokio::sync::Mutex::new(None),
-                address: address,
+                address,
                 connected: AtomicBool::new(false),
                 ble_services: DashMap::new(),
                 notifications_channel: broadcast_sender,
@@ -102,6 +103,7 @@ impl Peripheral {
                 latest_manufacturer_data: RwLock::new(HashMap::new()),
                 latest_service_data: RwLock::new(HashMap::new()),
                 services: RwLock::new(HashSet::new()),
+                class: RwLock::new(None),
             }),
         }
     }
@@ -123,8 +125,9 @@ impl Peripheral {
                 .read()
                 .unwrap()
                 .iter()
-                .map(|uuid| *uuid)
+                .copied()
                 .collect(),
+            class: *self.shared.class.read().unwrap(),
         }
     }
 
@@ -143,23 +146,25 @@ impl Peripheral {
             }
         }
         if let Ok(manufacturer_data) = advertisement.ManufacturerData() {
-            let mut manufacturer_data_guard = self.shared.latest_manufacturer_data.write().unwrap();
+            if manufacturer_data.Size().unwrap() > 0 {
+                let mut manufacturer_data_guard =
+                    self.shared.latest_manufacturer_data.write().unwrap();
+                *manufacturer_data_guard = manufacturer_data
+                    .into_iter()
+                    .map(|d| {
+                        let manufacturer_id = d.CompanyId().unwrap();
+                        let data = utils::to_vec(&d.Data().unwrap());
 
-            *manufacturer_data_guard = manufacturer_data
-                .into_iter()
-                .map(|d| {
-                    let manufacturer_id = d.CompanyId().unwrap();
-                    let data = utils::to_vec(&d.Data().unwrap());
+                        (manufacturer_id, data)
+                    })
+                    .collect();
 
-                    (manufacturer_id, data)
-                })
-                .collect();
-
-            // Emit event of newly received advertisement
-            self.emit_event(CentralEvent::ManufacturerDataAdvertisement {
-                id: self.shared.address.into(),
-                manufacturer_data: manufacturer_data_guard.clone(),
-            });
+                // Emit event of newly received advertisement
+                self.emit_event(CentralEvent::ManufacturerDataAdvertisement {
+                    id: self.shared.address.into(),
+                    manufacturer_data: manufacturer_data_guard.clone(),
+                });
+            }
         }
 
         // The Windows Runtime API (as of 19041) does not directly expose Service Data as a friendly API (like Manufacturer Data above)
@@ -248,7 +253,7 @@ impl Peripheral {
 
                 self.emit_event(CentralEvent::ServicesAdvertisement {
                     id: self.shared.address.into(),
-                    services: services_guard.iter().map(|uuid| *uuid).collect(),
+                    services: services_guard.iter().copied().collect(),
                 });
             }
         }
@@ -388,6 +393,9 @@ impl ApiPeripheral for Peripheral {
 
     /// Terminates a connection to the device. This is a synchronous operation.
     async fn disconnect(&self) -> Result<()> {
+        // We need to clear the services because if this device is re-connected,
+        // the cached service objects will no longer be valid (they must be refreshed).
+        self.shared.ble_services.clear();
         let mut device = self.shared.device.lock().await;
         *device = None;
         self.shared.connected.store(false, Ordering::Relaxed);
@@ -397,19 +405,37 @@ impl ApiPeripheral for Peripheral {
 
     /// Discovers all characteristics for the device. This is a synchronous operation.
     async fn discover_services(&self) -> Result<()> {
-        let device = self.shared.device.lock().await;
-        if let Some(ref device) = *device {
+        let mut device = self.shared.device.lock().await;
+        if let Some(ref mut device) = *device {
             let gatt_services = device.discover_services().await?;
-            for service in &gatt_services {
+            for service in gatt_services {
                 let uuid = utils::to_uuid(&service.Uuid().unwrap());
                 if !self.shared.ble_services.contains_key(&uuid) {
-                    match BLEDevice::get_characteristics(&service).await {
+                    match BLEDevice::get_characteristics(service).await {
                         Ok(characteristics) => {
-                            let characteristics = characteristics
+                            let characteristics =
+                                characteristics.into_iter().map(|characteristic| async {
+                                    let c = characteristic.clone();
+                                    (
+                                        characteristic,
+                                        BLEDevice::get_characteristic_descriptors(&c)
+                                            .await
+                                            .unwrap_or(Vec::new())
+                                            .into_iter()
+                                            .map(|descriptor| {
+                                                let descriptor = BLEDescriptor::new(descriptor);
+                                                (descriptor.uuid(), descriptor)
+                                            })
+                                            .collect(),
+                                    )
+                                });
+
+                            let characteristics = futures::future::join_all(characteristics)
+                                .await
                                 .into_iter()
-                                .map(|gatt_characteristic| {
+                                .map(|(characteristic, descriptors)| {
                                     let characteristic =
-                                        BLECharacteristic::new(gatt_characteristic);
+                                        BLECharacteristic::new(characteristic, descriptors);
                                     (characteristic.uuid(), characteristic)
                                 })
                                 .collect();
@@ -423,7 +449,7 @@ impl ApiPeripheral for Peripheral {
                             );
                         }
                         Err(e) => {
-                            error!("get_characteristics_async {:?}", e);
+                            warn!("get_characteristics_async {:?}", e);
                         }
                     }
                 }
@@ -469,7 +495,7 @@ impl ApiPeripheral for Peripheral {
         let uuid = characteristic.uuid;
         ble_characteristic
             .subscribe(Box::new(move |value| {
-                let notification = ValueNotification { uuid: uuid, value };
+                let notification = ValueNotification { uuid, value };
                 // Note: we ignore send errors here which may happen while there are no
                 // receivers...
                 let _ = notifications_sender.send(notification);
@@ -510,6 +536,40 @@ impl ApiPeripheral for Peripheral {
     async fn notifications(&self) -> Result<Pin<Box<dyn Stream<Item = ValueNotification> + Send>>> {
         let receiver = self.shared.notifications_channel.subscribe();
         Ok(notifications_stream_from_broadcast_receiver(receiver))
+    }
+
+    async fn write_descriptor(&self, descriptor: &Descriptor, data: &[u8]) -> Result<()> {
+        let ble_service = &*self
+            .shared
+            .ble_services
+            .get(&descriptor.service_uuid)
+            .ok_or_else(|| Error::NotSupported("Service not found for write".into()))?;
+        let ble_characteristic = ble_service
+            .characteristics
+            .get(&descriptor.characteristic_uuid)
+            .ok_or_else(|| Error::NotSupported("Characteristic not found for write".into()))?;
+        let ble_descriptor = ble_characteristic
+            .descriptors
+            .get(&descriptor.uuid)
+            .ok_or_else(|| Error::NotSupported("Descriptor not found for write".into()))?;
+        ble_descriptor.write_value(data).await
+    }
+
+    async fn read_descriptor(&self, descriptor: &Descriptor) -> Result<Vec<u8>> {
+        let ble_service = &*self
+            .shared
+            .ble_services
+            .get(&descriptor.service_uuid)
+            .ok_or_else(|| Error::NotSupported("Service not found for read".into()))?;
+        let ble_characteristic = ble_service
+            .characteristics
+            .get(&descriptor.characteristic_uuid)
+            .ok_or_else(|| Error::NotSupported("Characteristic not found for read".into()))?;
+        let ble_descriptor = ble_characteristic
+            .descriptors
+            .get(&descriptor.uuid)
+            .ok_or_else(|| Error::NotSupported("Descriptor not found for write".into()))?;
+        ble_descriptor.read_value().await
     }
 }
 

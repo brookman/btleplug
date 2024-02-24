@@ -33,6 +33,13 @@ pub mod ns {
         unsafe { msg_send![class!(NSNumber), numberWithBool: value] }
     }
 
+    pub fn number_as_i64(value: id) -> i64 {
+        unsafe {
+            let i: cocoa::foundation::NSInteger = msg_send![&*value, integerValue];
+            i as i64
+        }
+    }
+
     // NSArray
 
     pub fn array_count(nsarray: impl NSArray) -> NSUInteger {
@@ -87,6 +94,15 @@ pub mod ns {
             uuidstring
         }
     }
+
+    // NSError
+
+    pub fn error_localizeddescription(nserror: id) -> id /* NSString* */ {
+        unsafe {
+            let description: id = msg_send![nserror, localizedDescription];
+            description
+        }
+    }
 }
 
 pub mod cb {
@@ -101,7 +117,7 @@ pub mod cb {
     pub type dispatch_queue_attr_t = *const dispatch_object_s;
     pub const DISPATCH_QUEUE_SERIAL: dispatch_queue_attr_t = 0 as dispatch_queue_attr_t;
 
-    #[link(name = "AppKit", kind = "framework")]
+    #[cfg_attr(target_os = "macos", link(name = "AppKit", kind = "framework"))]
     #[link(name = "Foundation", kind = "framework")]
     #[link(name = "CoreBluetooth", kind = "framework")]
     extern "C" {
@@ -269,6 +285,21 @@ pub mod cb {
         }
     }
 
+    pub fn peripheral_readvalue_fordescriptor(
+        cbperipheral: id,
+        descriptor: id, /* CBDescriptor * */
+    ) {
+        unsafe { msg_send![cbperipheral, readValueForDescriptor: descriptor] }
+    }
+
+    pub fn peripheral_writevalue_fordescriptor(
+        cbperipheral: id,
+        value: id,      /* NSData* */
+        descriptor: id, /* CBCharacteristic* */
+    ) {
+        unsafe { msg_send![cbperipheral, writeValue:value forDescriptor:descriptor] }
+    }
+
     // CBPeripheralState = NSInteger from CBPeripheral.h
 
     pub const PERIPHERALSTATE_CONNECTED: c_int = 2; // CBPeripheralStateConnected
@@ -309,6 +340,16 @@ pub mod cb {
 
     pub fn characteristic_service(cbcharacteristic: id) -> id /* CBService* */ {
         unsafe { msg_send![cbcharacteristic, service] }
+    }
+
+    pub fn characteristic_descriptors(cbcharacteristic: id) -> id /* NSArray<CBDescriptor*>* */ {
+        unsafe { msg_send![cbcharacteristic, descriptors] }
+    }
+
+    // CBDescriptor : CBAttribute
+
+    pub fn descriptor_characteristic(cbdescriptor: id) -> id /* CBCharacteristic* */ {
+        unsafe { msg_send![cbdescriptor, characteristic] }
     }
 
     // CBCharacteristicProperties = NSUInteger from CBCharacteristic.h

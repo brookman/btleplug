@@ -1,5 +1,6 @@
 package com.nonpolynomial.btleplug.android.impl;
 
+import android.annotation.SuppressLint;
 import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
 import android.bluetooth.BluetoothGatt;
@@ -41,6 +42,7 @@ class Peripheral {
         this.callback = new Callback();
     }
 
+    @SuppressLint("MissingPermission")
     public Future<Void> connect() {
         SimpleFuture<Void> future = new SimpleFuture<>();
         synchronized (this) {
@@ -82,6 +84,7 @@ class Peripheral {
         return future;
     }
 
+    @SuppressLint("MissingPermission")
     public Future<Void> disconnect() {
         SimpleFuture<Void> future = new SimpleFuture<>();
         synchronized (this) {
@@ -99,6 +102,8 @@ class Peripheral {
                                     }
 
                                     if (newState == BluetoothGatt.STATE_DISCONNECTED) {
+                                        Peripheral.this.gatt.close();
+                                        Peripheral.this.gatt = null;
                                         Peripheral.this.wakeCommand(future, null);
                                     }
                                 });
@@ -116,6 +121,7 @@ class Peripheral {
         return this.connected;
     }
 
+    @SuppressLint("MissingPermission")
     public Future<byte[]> read(UUID uuid) {
         SimpleFuture<byte[]> future = new SimpleFuture<>();
         synchronized (this) {
@@ -137,6 +143,20 @@ class Peripheral {
                                 Peripheral.this.wakeCommand(future, characteristic.getValue());
                             });
                         }
+                        @Override
+                        public void onConnectionStateChange(BluetoothGatt gatt, int status, int newState) {
+                            Peripheral.this.asyncWithFuture(future, () -> {
+                                if (status != BluetoothGatt.GATT_SUCCESS) {
+                                    throw new RuntimeException("Disconnected while in read operation");
+                                }
+
+                                if (newState == BluetoothGatt.STATE_DISCONNECTED) {
+                                    Peripheral.this.gatt.close();
+                                    Peripheral.this.gatt = null;
+                                    Peripheral.this.wakeCommand(future, null);
+                                }
+                            });
+                        }
                     });
                     if (!this.gatt.readCharacteristic(characteristic)) {
                         throw new RuntimeException("Unable to read characteristic");
@@ -147,6 +167,7 @@ class Peripheral {
         return future;
     }
 
+    @SuppressLint("MissingPermission")
     public Future<Void> write(UUID uuid, byte[] data, int writeType) {
         SimpleFuture<Void> future = new SimpleFuture<>();
         synchronized (this) {
@@ -170,9 +191,23 @@ class Peripheral {
                                 Peripheral.this.wakeCommand(future, null);
                             });
                         }
+                        @Override
+                        public void onConnectionStateChange(BluetoothGatt gatt, int status, int newState) {
+                            Peripheral.this.asyncWithFuture(future, () -> {
+                                if (status != BluetoothGatt.GATT_SUCCESS) {
+                                    throw new RuntimeException("Disconnected while in write operation");
+                                }
+
+                                if (newState == BluetoothGatt.STATE_DISCONNECTED) {
+                                    Peripheral.this.gatt.close();
+                                    Peripheral.this.gatt = null;
+                                    Peripheral.this.wakeCommand(future, null);
+                                }
+                            });
+                        }
                     });
                     if (!this.gatt.writeCharacteristic(characteristic)) {
-                        throw new RuntimeException("Unable to read characteristic");
+                        throw new RuntimeException("Unable to write characteristic");
                     }
                 });
             });
@@ -180,6 +215,7 @@ class Peripheral {
         return future;
     }
 
+    @SuppressLint("MissingPermission")
     public Future<List<BluetoothGattService>> discoverServices() {
         SimpleFuture<List<BluetoothGattService>> future = new SimpleFuture<>();
         synchronized (this) {
@@ -198,6 +234,20 @@ class Peripheral {
 
                             Peripheral.this.wakeCommand(future, gatt.getServices());
                         }
+                        @Override
+                        public void onConnectionStateChange(BluetoothGatt gatt, int status, int newState) {
+                            Peripheral.this.asyncWithFuture(future, () -> {
+                                if (status != BluetoothGatt.GATT_SUCCESS) {
+                                    throw new RuntimeException("Disconnected while discovering services");
+                                }
+
+                                if (newState == BluetoothGatt.STATE_DISCONNECTED) {
+                                    Peripheral.this.gatt.close();
+                                    Peripheral.this.gatt = null;
+                                    Peripheral.this.wakeCommand(future, null);
+                                }
+                            });
+                        }
                     });
                     if (!this.gatt.discoverServices()) {
                         throw new RuntimeException("Unable to discover services");
@@ -208,6 +258,7 @@ class Peripheral {
         return future;
     }
 
+    @SuppressLint("MissingPermission")
     public Future<Void> setCharacteristicNotification(UUID uuid, boolean enable) {
         SimpleFuture<Void> future = new SimpleFuture<>();
         synchronized (this) {
@@ -243,6 +294,20 @@ class Peripheral {
                                 Peripheral.this.wakeCommand(future, null);
                             });
                         }
+                        @Override
+                        public void onConnectionStateChange(BluetoothGatt gatt, int status, int newState) {
+                            Peripheral.this.asyncWithFuture(future, () -> {
+                                if (status != BluetoothGatt.GATT_SUCCESS) {
+                                    throw new RuntimeException("Disconnected while setting characteristic notification");
+                                }
+
+                                if (newState == BluetoothGatt.STATE_DISCONNECTED) {
+                                    Peripheral.this.gatt.close();
+                                    Peripheral.this.gatt = null;
+                                    Peripheral.this.wakeCommand(future, null);
+                                }
+                            });
+                        }
                     });
                 });
             });
@@ -258,6 +323,72 @@ class Peripheral {
         return stream;
     }
 
+    @SuppressLint("MissingPermission")
+    public Future<byte[]> readDescriptor(UUID characteristic, UUID uuid) {
+        SimpleFuture<byte[]> future = new SimpleFuture<>();
+        synchronized (this) {
+            this.queueCommand(() -> {
+                this.asyncWithFuture(future, () -> {
+                    if (!this.connected) {
+                        throw new NotConnectedException();
+                    }
+
+                    BluetoothGattDescriptor descriptor = this.getDescriptorByUuid(characteristic, uuid);
+                    this.setCommandCallback(new CommandCallback() {
+                        @Override
+                        public void onDescriptorRead(BluetoothGatt gatt, BluetoothGattDescriptor descriptor, int status) {
+                            Peripheral.this.asyncWithFuture(future, () -> {
+                                if (!descriptor.getUuid().equals(uuid)) {
+                                    throw new UnexpectedCharacteristicException();
+                                }
+
+                                Peripheral.this.wakeCommand(future, descriptor.getValue());
+                            });
+                        }
+                    });
+                    if (!this.gatt.readDescriptor(descriptor)) {
+                        throw new RuntimeException("Unable to read descriptor");
+                    }
+                });
+            });
+        }
+        return future;
+    }
+
+    @SuppressLint("MissingPermission")
+    public Future<Void> writeDescriptor(UUID characteristic, UUID uuid, byte[] data, int writeType) {
+        SimpleFuture<Void> future = new SimpleFuture<>();
+        synchronized (this) {
+            this.queueCommand(() -> {
+                this.asyncWithFuture(future, () -> {
+                    if (!this.connected) {
+                        throw new NotConnectedException();
+                    }
+
+                    BluetoothGattDescriptor descriptor = this.getDescriptorByUuid(characteristic, uuid);
+                    descriptor.setValue(data);
+                    this.setCommandCallback(new CommandCallback() {
+                        @Override
+                        public void onDescriptorWrite(BluetoothGatt gatt, BluetoothGattDescriptor descriptor, int status) {
+                            Peripheral.this.asyncWithFuture(future, () -> {
+                                if (!descriptor.getUuid().equals(uuid)) {
+                                    throw new UnexpectedCharacteristicException();
+                                }
+
+                                Peripheral.this.wakeCommand(future, null);
+                            });
+                        }
+                    });
+                    if (!this.gatt.writeDescriptor(descriptor)) {
+                        throw new RuntimeException("Unable to read characteristic");
+                    }
+                });
+            });
+        }
+        return future;
+    }
+
+    @SuppressLint("MissingPermission")
     private List<BluetoothGattCharacteristic> getCharacteristics() {
         List<BluetoothGattCharacteristic> result = new ArrayList<>();
         if (this.gatt != null) {
@@ -268,10 +399,23 @@ class Peripheral {
         return result;
     }
 
+    @SuppressLint("MissingPermission")
     private BluetoothGattCharacteristic getCharacteristicByUuid(UUID uuid) {
         for (BluetoothGattCharacteristic characteristic : this.getCharacteristics()) {
             if (characteristic.getUuid().equals(uuid)) {
                 return characteristic;
+            }
+        }
+
+        throw new NoSuchCharacteristicException();
+    }
+
+    @SuppressLint("MissingPermission")
+    private BluetoothGattDescriptor getDescriptorByUuid(UUID characteristicUuid, UUID uuid) {
+        BluetoothGattCharacteristic characteristic = getCharacteristicByUuid(characteristicUuid);
+        for (BluetoothGattDescriptor descriptor : characteristic.getDescriptors()) {
+            if (descriptor.getUuid().equals(uuid)) {
+                return descriptor;
             }
         }
 
@@ -407,6 +551,12 @@ class Peripheral {
 
         @Override
         public void onCharacteristicWrite(BluetoothGatt gatt, BluetoothGattCharacteristic characteristic, int status) {
+            throw new UnexpectedCallbackException();
+        }
+
+        @Override
+        public void onDescriptorRead(BluetoothGatt gatt, BluetoothGattDescriptor descriptor,
+                                     int status) {
             throw new UnexpectedCallbackException();
         }
 

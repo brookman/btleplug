@@ -1,3 +1,65 @@
+# 0.11.5 (2024-01-10)
+
+## Bugfixes
+
+- Fix issue with Windows failing to read characteristic descriptors
+
+# 0.11.4 (2024-01-01)
+
+## Bugfixes
+
+- Fix issue with manufacturer data not being consistently found on windows
+- Fix UUID used for finding characteristics on windows
+- Peripheral connection failure now returns an error
+- Peripheral service discovery failure now returns an error
+
+# 0.11.3 (2023-11-18)
+
+## Bugfixes
+
+- CoreBluetooth: Fix missing include
+
+# 0.11.2 (2023-11-18)
+
+## Bugfixes
+
+- Android: Fix advertisements with invalid UTF-8 strings not appearing
+- All Platforms: Fix clippy warnings
+
+# 0.11.1 (2023-09-08)
+
+## Bugfixes
+
+- Windows/UWP: Internally held BTLE services now automatically disconnect when device disconnect is
+  called.
+
+# 0.11.0 (2023-07-04)
+
+## Features
+
+- Add scan filtering for android and windows
+- Implement serde Serialize/Deserliaze for PeripheralProperties, ScannFilter (#310, #314)
+- Add device class to properties (#319)
+- Add descriptor discovery and read/write across all platforms (#316)
+
+## Bugfixes
+
+- Update RSSI w/ advertisements on CoreBluetooth (#306)
+- Fix issues with various unhandled exceptions on Android (#311)
+
+# 0.10.5 (2023-04-13)
+
+## Features
+
+- Add RSSI readings for Android
+
+## Bugfixes
+
+- Link conditionally against macOS AppKit based on platform
+- Improve error propagation on Windows
+- Reset connected state to false on disconnect on windows
+- Set DuplicateData = true for bluez
+
 # 0.10.4 (2022-11-27)
 
 ## Bugfixes

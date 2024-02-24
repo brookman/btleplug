@@ -13,8 +13,8 @@ use super::{
 };
 use crate::{
     api::{
-        self, BDAddr, CentralEvent, CharPropFlags, Characteristic, PeripheralProperties, Service,
-        ValueNotification, WriteType,
+        self, BDAddr, CentralEvent, CharPropFlags, Characteristic, Descriptor,
+        PeripheralProperties, Service, ValueNotification, WriteType,
     },
     common::{adapter_manager::AdapterManager, util::notifications_stream_from_broadcast_receiver},
     Error, Result,
@@ -101,6 +101,7 @@ impl Peripheral {
             manufacturer_data: HashMap::new(),
             service_data: HashMap::new(),
             services: Vec::new(),
+            class: None,
         });
         let (notifications_channel, _) = broadcast::channel(16);
 
@@ -126,8 +127,9 @@ impl Peripheral {
                         // receivers...
                         let _ = shared.notifications_channel.send(notification);
                     }
-                    Some(CBPeripheralEvent::ManufacturerData(manufacturer_id, data)) => {
+                    Some(CBPeripheralEvent::ManufacturerData(manufacturer_id, data, rssi)) => {
                         let mut properties = shared.properties.lock().unwrap();
+                        properties.rssi = Some(rssi);
                         properties
                             .manufacturer_data
                             .insert(manufacturer_id, data.clone());
@@ -136,8 +138,9 @@ impl Peripheral {
                             manufacturer_data: properties.manufacturer_data.clone(),
                         });
                     }
-                    Some(CBPeripheralEvent::ServiceData(service_data)) => {
+                    Some(CBPeripheralEvent::ServiceData(service_data, rssi)) => {
                         let mut properties = shared.properties.lock().unwrap();
+                        properties.rssi = Some(rssi);
                         properties.service_data.extend(service_data.clone());
 
                         shared.emit_event(CentralEvent::ServiceDataAdvertisement {
@@ -145,8 +148,9 @@ impl Peripheral {
                             service_data,
                         });
                     }
-                    Some(CBPeripheralEvent::Services(services)) => {
+                    Some(CBPeripheralEvent::Services(services, rssi)) => {
                         let mut properties = shared.properties.lock().unwrap();
+                        properties.rssi = Some(rssi);
                         properties.services = services.clone();
 
                         shared.emit_event(CentralEvent::ServicesAdvertisement {
@@ -244,7 +248,8 @@ impl api::Peripheral for Peripheral {
                 self.shared
                     .emit_event(CentralEvent::DeviceConnected(self.shared.uuid.into()));
             }
-            _ => panic!("Shouldn't get anything but connected!"),
+            CoreBluetoothReply::Err(msg) => return Err(Error::RuntimeError(msg)),
+            _ => panic!("Shouldn't get anything but connected or err!"),
         }
         trace!("Device connected!");
         Ok(())
@@ -373,6 +378,48 @@ impl api::Peripheral for Peripheral {
     async fn notifications(&self) -> Result<Pin<Box<dyn Stream<Item = ValueNotification> + Send>>> {
         let receiver = self.shared.notifications_channel.subscribe();
         Ok(notifications_stream_from_broadcast_receiver(receiver))
+    }
+
+    async fn write_descriptor(&self, descriptor: &Descriptor, data: &[u8]) -> Result<()> {
+        let fut = CoreBluetoothReplyFuture::default();
+        self.shared
+            .message_sender
+            .to_owned()
+            .send(CoreBluetoothMessage::WriteDescriptorValue {
+                peripheral_uuid: self.shared.uuid,
+                service_uuid: descriptor.service_uuid,
+                characteristic_uuid: descriptor.characteristic_uuid,
+                descriptor_uuid: descriptor.uuid,
+                data: Vec::from(data),
+                future: fut.get_state_clone(),
+            })
+            .await?;
+        match fut.await {
+            CoreBluetoothReply::Ok => {}
+            reply => panic!("Unexpected reply: {:?}", reply),
+        }
+        Ok(())
+    }
+
+    async fn read_descriptor(&self, descriptor: &Descriptor) -> Result<Vec<u8>> {
+        let fut = CoreBluetoothReplyFuture::default();
+        self.shared
+            .message_sender
+            .to_owned()
+            .send(CoreBluetoothMessage::ReadDescriptorValue {
+                peripheral_uuid: self.shared.uuid,
+                service_uuid: descriptor.service_uuid,
+                characteristic_uuid: descriptor.characteristic_uuid,
+                descriptor_uuid: descriptor.uuid,
+                future: fut.get_state_clone(),
+            })
+            .await?;
+        match fut.await {
+            CoreBluetoothReply::ReadResult(chars) => Ok(chars),
+            _ => {
+                panic!("Shouldn't get anything but read result!");
+            }
+        }
     }
 }
 

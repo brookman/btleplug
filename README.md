@@ -48,7 +48,7 @@ support.
 | Discover Devices                      | X       | X           | X     | X       |
 | └ Discover Services                   | X       | X           | X     | X       |
 | └ Discover Characteristics            | X       | X           | X     | X       |
-| └ Discover Descriptors                |         |             |       |         |
+| └ Discover Descriptors                | X       | X           | X     | X       |
 | └ Discover Name                       | X       | X           | X     | X       |
 | └ Discover Manufacturer Data          | X       | X           | X     | X       |
 | └ Discover Service Data               | X       | X           | X     | X       |
@@ -62,8 +62,8 @@ support.
 | Subscribe to Characteristic           | X       | X           | X     | X       |
 | Unsubscribe from Characteristic       | X       | X           | X     | X       |
 | Get Characteristic Notification Event | X       | X           | X     | X       |
-| Read Descriptor                       |         |             |       |         |
-| Write Descriptor                      |         |             |       |         |
+| Read Descriptor                       | X       | X           | X     | X       |
+| Write Descriptor                      | X       | X           | X     | X       |
 
 ## Library Features
 
@@ -159,7 +159,7 @@ There are also some examples in the Flutter shim listed below.
 ### Flutter
 
 While we don't specifically support Flutter in this repo yet, there's a template repo available at
-[https://github.com/trobanga/btleplugtest](https://github.com/trobanga/btleplugtest). This template has builds for both Android and iOS using btleplug.
+[https://github.com/trobanga/flutter_btleplug](https://github.com/trobanga/flutter_btleplug). This template has builds for both Android and iOS using btleplug.
 
 ## Alternative Libraries
 
