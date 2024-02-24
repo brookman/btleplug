@@ -405,3 +405,9 @@ impl From<CharacteristicFlags> for CharPropFlags {
         result
     }
 }
+
+impl From<BDAddr> for PeripheralId {
+    fn from(address: BDAddr) -> Self {
+        PeripheralId(address)
+    }
+}
